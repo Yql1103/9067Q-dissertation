@@ -202,8 +202,50 @@ Outputs:
 
 ---
 
-## Citation
+\paragraph{SEC filings.}
+Form 10-K and Form 8-K filings are downloaded from the
+\textbf{SEC EDGAR} database (\url{https://www.sec.gov/cgi-bin/browse-edgar})
+using the \texttt{sec-edgar-downloader} Python package. Filing dates
+are extracted from the \texttt{FILED AS OF DATE} field in the SGML
+submission header (\texttt{full-submission.txt}). Raw HTML documents
+are cleaned with \texttt{BeautifulSoup} by removing financial
+statement tables, XBRL-tagged data, navigation bars, and boilerplate
+legal text. Documents are capped at 8,000 words and must contain at
+least 150 clean words to be retained; Form 10-Q filings are excluded
+because fewer than 0.05\% contain sufficient narrative text after
+table removal. The baseline textual dataset comprises 263 Form~10-K
+and 4,042 Form~8-K documents across 41 firms over 2019--2024.
 
-If you use this pipeline, please cite:
+\vspace{0.3em}
+\noindent Due to the large size of the raw filing archive (several
+gigabytes), the downloaded SEC filings are not included in the GitHub
+repository. The complete filing archive is deposited separately and
+is available for download at:
 
-> Yu, Q. (2026). *FinBERT Analysis of SEC Filings: Disclosure Sentiment, Realized Volatility, and Credit Spread Transmission*. MPhil Dissertation, Faculty of Economics, University of Cambridge.
+\begin{center}
+\url{https://drive.google.com/file/d/1eRr2smRRcK8peeIzdGcPJwMEgd4kT-jO/view?usp=drive_link}
+\end{center}
+
+\noindent The archive should be extracted into the
+\texttt{data/sec\_filings/} directory before running
+\texttt{step3\_finbert.py}. The expected folder structure is:
+
+\begin{verbatim}
+data/
+└── sec_filings/
+    └── sec-edgar-filings/
+        └── TICKER/
+            ├── 10-K/
+            │   └── YYYY-MM-DD/
+            │       ├── primary-document.html
+            │       └── full-submission.txt
+            └── 8-K/
+                └── YYYY-MM-DD/
+                    ├── primary-document.html
+                    └── full-submission.txt
+\end{verbatim}
+
+\noindent Alternatively, the filings can be re-downloaded from
+scratch by running \texttt{step2\_sec\_download.py}, which fetches
+all filings directly from SEC EDGAR and supports resuming after
+interruption.
