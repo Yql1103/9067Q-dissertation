@@ -1,0 +1,6 @@
+Variable,N,Mean,Std,Min,P25,Median,Max,Skew,Kurt
+AvgSent (firm-day),0,,,,,,,,
+NegShare,0,,,,,,,,
+TextVolume log(1+N),0,,,,,,,,
+SentMomentum,0,,,,,,,,
+SentVol (5-day std),0,,,,,,,,
