@@ -12,10 +12,10 @@ This repository contains the data pipeline for the dissertation, which investiga
 The pipeline covers a panel of **41 U.S. firms** across **10 GICS sectors** over **2019–2024** (61,848 firm-day observations), and proceeds in four steps:
 
 ```
-step1_fred.py        →  Macroeconomic controls (FRED)
+step1_fred.py         →  Macroeconomic controls (FRED)
 step2_sec_download.py →  SEC 10-K / 8-K filings (EDGAR)
-step3_finbert.py     →  FinBERT sentiment scoring
-step4_wrds_panel.py  →  CRSP + Compustat + master panel
+step3_finbert.py      →  FinBERT sentiment scoring
+step4_wrds_panel.py   →  CRSP + Compustat + master panel
 ```
 
 ---
@@ -30,7 +30,7 @@ step4_wrds_panel.py  →  CRSP + Compustat + master panel
 ├── step4_wrds_panel.py     # WRDS data + master panel assembly
 ├── data/                   # Generated outputs (not tracked by git)
 │   ├── fred_daily.csv
-│   ├── sec_filings/
+│   ├── sec_filings/        # See "SEC Filing Archive" below
 │   ├── finbert_scores.csv
 │   ├── sentiment_firmday.csv
 │   ├── crsp_daily.csv
@@ -39,6 +39,35 @@ step4_wrds_panel.py  →  CRSP + Compustat + master panel
 │   └── master_panel.csv
 └── README.md
 ```
+
+---
+
+## SEC Filing Archive
+
+Due to the large size of the raw filing archive (~several GB), the downloaded SEC filings are **not included in this repository**. The complete archive is available for download from Google Drive:
+
+> **[Download SEC filings archive (Google Drive)](https://drive.google.com/file/d/1eRr2smRRcK8peeIzdGcPJwMEgd4kT-jO/view?usp=drive_link)**
+
+The archive contains 263 Form 10-K and 4,042 Form 8-K filings across 41 firms over 2019–2024. After downloading, extract it so that the folder structure matches:
+
+```
+data/
+└── sec_filings/
+    └── sec-edgar-filings/
+        └── TICKER/
+            ├── 10-K/
+            │   └── YYYY-MM-DD/
+            │       ├── primary-document.html
+            │       └── full-submission.txt
+            └── 8-K/
+                └── YYYY-MM-DD/
+                    ├── primary-document.html
+                    └── full-submission.txt
+```
+
+Once extracted, skip Step 2 and proceed directly to Step 3.
+
+Alternatively, the filings can be re-downloaded from scratch by running `step2_sec_download.py`, which fetches all filings directly from SEC EDGAR and supports resuming after interruption.
 
 ---
 
@@ -67,23 +96,26 @@ tqdm
 requests
 wrds
 sec-edgar-downloader
+statsmodels
 ```
 
 </details>
 
 ### WRDS access
-Steps 1 and 4 require an active [WRDS](https://wrds-www.wharton.upenn.edu/) account with access to:
-- `crsp.dsf` and `crsp.msenames` (CRSP daily stock file)
-- `crsp.ccmxpf_linktable` (CRSP–Compustat link)
-- `comp.fundq` and `comp.security` (Compustat quarterly)
+Step 4 requires an active [WRDS](https://wrds-www.wharton.upenn.edu/) account with access to:
+- `crsp.dsf` and `crsp.msenames` — CRSP daily stock file
+- `crsp.ccmxpf_linktable` — CRSP–Compustat CCM link table
+- `comp.fundq` and `comp.security` — Compustat quarterly fundamentals
 
-On first run, `wrds.Connection()` will prompt for your WRDS credentials.
+On first run, `wrds.Connection()` will prompt for your WRDS credentials and cache them locally.
+
+> **Note:** Steps 1–3 do not require WRDS access. Step 1 uses the public FRED CSV endpoint (no API key needed). Step 2 uses the SEC EDGAR public API.
 
 ---
 
 ## Usage
 
-Run the four steps in order. Each step caches its output to `data/` and supports **resume after interruption** — re-running a step will skip already-completed work.
+Run the four steps in order. Each step caches its output to `data/` and is **idempotent** — re-running will load cached files from disk rather than re-downloading.
 
 ### Step 1 — FRED macroeconomic data
 
@@ -93,7 +125,9 @@ Downloads Moody's BAA/AAA–Treasury spreads, VIX, NFCI, federal funds rate, and
 python step1_fred.py
 ```
 
-Output: `data/fred_daily.csv`
+| Output | Description |
+|---|---|
+| `data/fred_daily.csv` | Daily macro series, forward-filled for weekends/holidays |
 
 ---
 
@@ -105,8 +139,12 @@ Downloads 10-K and 8-K filings for all 41 sample firms from SEC EDGAR. Progress 
 python step2_sec_download.py
 ```
 
-Output: `data/sec_filings/TICKER/FORM/DATE/`  
-Summary: `data/sec_filing_counts.csv`
+| Output | Description |
+|---|---|
+| `data/sec_filings/TICKER/FORM/DATE/` | Raw HTML filing documents |
+| `data/sec_filing_counts.csv` | Filing count by firm and form type |
+
+> **Skip this step** if you have downloaded the filing archive from Google Drive (see [SEC Filing Archive](#sec-filing-archive) above).
 
 > **Note:** 10-Q filings are downloaded but excluded from sentiment scoring in Step 3, as fewer than 0.05% contain sufficient narrative text after HTML table removal.
 
@@ -114,63 +152,99 @@ Summary: `data/sec_filing_counts.csv`
 
 ### Step 3 — FinBERT sentiment scoring
 
-Scores each filing using [`yiyanghkust/finbert-tone`](https://huggingface.co/yiyanghkust/finbert-tone). Documents exceeding the 512-token BERT limit are split into 510-token chunks; chunk-level probabilities are averaged. The document-level sentiment score is:
+Scores each filing using [`yiyanghkust/finbert-tone`](https://huggingface.co/yiyanghkust/finbert-tone). Documents exceeding the 512-token BERT input limit are split into non-overlapping 510-token chunks; chunk-level softmax probabilities are averaged to produce the document-level score:
 
 ```
 Sent = P(Positive) − P(Negative)  ∈ [−1, 1]
 ```
 
-Label mapping (verified by unit tests): `0 = Neutral`, `1 = Positive`, `2 = Negative`.
+Label mapping verified by unit tests on known-polarity financial sentences:
+
+| Label index | Class | Test sentence |
+|---|---|---|
+| 0 | Neutral | "The board held its quarterly meeting." |
+| 1 | Positive | "Earnings exceeded expectations, strong growth outlook." |
+| 2 | Negative | "The company faces severe liquidity risk and may default." |
 
 ```bash
 python step3_finbert.py
 ```
 
-Outputs:
-| File | Description |
+| Output | Description |
 |---|---|
-| `data/finbert_scores.csv` | Document-level scores |
-| `data/sentiment_by_source.csv` | Summary by filing type (Table 3) |
-| `data/sentiment_firmday.csv` | Firm-day aggregates with AvgSent, NegShare, TextVolume, SentMom, SentVol |
-| `data/sentiment_stats.csv` | Descriptive statistics (Table 4) |
+| `data/finbert_scores.csv` | Document-level FinBERT scores |
+| `data/sentiment_by_source.csv` | Summary statistics by filing type |
+| `data/sentiment_firmday.csv` | Firm-day aggregates (AvgSent, NegShare, TextVolume, SentMom, SentVol) |
+| `data/sentiment_stats.csv` | Descriptive statistics |
+| `data/finbert_checkpoint.json` | Resume checkpoint |
 
-The script uses MPS (Apple Silicon), CUDA, or CPU automatically. A checkpoint file (`data/finbert_checkpoint.json`) enables resuming from the last saved position.
+The script automatically selects the best available device (MPS → CUDA → CPU). A checkpoint file enables resuming from the last saved position after any interruption.
 
 ---
 
 ### Step 4 — WRDS data and master panel
 
-Downloads CRSP daily equity data and Compustat quarterly fundamentals from WRDS, then merges all data sources into a single firm-day panel. Compustat variables are matched with a **45-day reporting lag** to avoid look-ahead bias.
+Downloads CRSP daily equity data and Compustat quarterly fundamentals from WRDS, then merges all data sources (CRSP + FRED + Compustat + FinBERT sentiment) into a single firm-day panel. Compustat variables are matched with a **45-day reporting lag** to avoid look-ahead bias.
 
 ```bash
 python step4_wrds_panel.py
 ```
 
-Outputs:
-| File | Description |
+| Output | Description |
 |---|---|
-| `data/crsp_daily.csv` | CRSP equity data with Parkinson RBV and HAR lags |
+| `data/crsp_daily.csv` | CRSP equity data with Parkinson RBV and HAR lag components |
 | `data/compustat_quarterly.csv` | Quarterly fundamentals and financial ratios |
-| `data/crsp_compustat_link.csv` | CCM link table |
-| `data/master_panel.csv` | Final merged panel (≈ 61,848 firm-day obs) |
+| `data/crsp_compustat_link.csv` | CCM link table (PERMNO ↔ GVKEY) |
+| `data/master_panel.csv` | Final merged panel (≈ 61,848 firm-day obs × all variables) |
 
 ---
 
 ## Key Variables
 
+### Volatility
+
 | Variable | Definition | Source |
 |---|---|---|
 | `rbv` | Parkinson range-based volatility: `(ln H − ln L)² / (4 ln 2)` | CRSP |
-| `ln_rbv` | Log of `rbv` | Derived |
-| `rbv_w` / `rbv_m` | 5-day / 22-day lagged mean of `rbv` (HAR components) | Derived |
-| `avg_sent` | Mean FinBERT sentiment across same-day filings | EDGAR + FinBERT |
-| `neg_share` | Fraction of filings with sentiment < −0.05 | Derived |
-| `text_volume` | log(1 + number of filings) | Derived |
-| `sent_mom` | 5-day sentiment momentum (winsorised 1/99%) | Derived |
-| `sent_vol` | 5-day rolling std of `avg_sent` | Derived |
-| `baa_treasury_spread` | Moody's BAA yield minus 10Y Treasury | FRED: BAA10Y |
-| `leverage` | (Long-term debt + current debt) / total assets | Compustat |
-| `profitability` | Operating income before depreciation / total assets | Compustat |
+| `ln_rbv` | Natural log of `rbv` | Derived |
+| `rbv_w` | 5-day lagged mean of `rbv` (weekly HAR component) | Derived |
+| `rbv_m` | 22-day lagged mean of `rbv` (monthly HAR component) | Derived |
+
+### Sentiment
+
+| Variable | Definition | Source |
+|---|---|---|
+| `avg_sent` | Mean `Sent` across same-day filings for firm `i` | EDGAR + FinBERT |
+| `neg_share` | Fraction of filings with `Sent < −0.05` | Derived |
+| `text_volume` | `log(1 + number of filings)` | Derived |
+| `sent_mom` | 5-day sentiment momentum, winsorised at 1st/99th percentile | Derived |
+| `sent_vol` | 5-day rolling standard deviation of `avg_sent` | Derived |
+
+### Credit and macro
+
+| Variable | FRED code | Description |
+|---|---|---|
+| `baa_treasury_spread` | `BAA10Y` | Moody's BAA yield minus 10Y Treasury (%) |
+| `aaa_treasury_spread` | `AAA10Y` | Moody's AAA yield minus 10Y Treasury (%) |
+| `vix` | `VIXCLS` | CBOE Volatility Index |
+| `nfci` | `NFCI` | Chicago Fed National Financial Conditions Index |
+| `fed_funds` | `DFEDTARU` | Federal funds upper target rate (%) |
+| `t_3m` | `DGS3MO` | 3-month Treasury yield (%) |
+| `t_10y` | `DGS10` | 10-year Treasury yield (%) |
+| `term_spread` | `T10Y3M` | 10Y minus 3M Treasury yield (%) |
+
+### Firm fundamentals (Compustat)
+
+| Variable | Definition |
+|---|---|
+| `leverage` | (Long-term debt + current debt) / total assets |
+| `profitability` | Operating income before depreciation / total assets |
+| `current_ratio` | Current assets / current liabilities |
+| `roe` | Net income / common equity |
+| `log_assets` | Natural log of total assets |
+| `rev_growth` | Quarter-on-quarter revenue growth |
+
+All Compustat variables are winsorised at the 1st and 99th percentiles.
 
 ---
 
@@ -193,59 +267,48 @@ Outputs:
 
 ---
 
-## Notes
+## Reproducing the Results
 
-- `data/` is excluded from version control (add to `.gitignore`). Raw filings can be large (several GB).
-- FRED series are fetched without an API key via the public CSV endpoint; no registration is required.
-- The SEC EDGAR downloader respects the 10 requests/second rate limit automatically.
-- All scripts are idempotent: cached files are loaded from disk on subsequent runs.
+A complete replication proceeds as follows:
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Download FRED macro data (no credentials required)
+python step1_fred.py
+
+# 3a. Download SEC filing archive from Google Drive and extract to data/sec_filings/
+#     OR re-download from EDGAR (takes ~30–60 minutes):
+python step2_sec_download.py
+
+# 4. Score filings with FinBERT (GPU recommended; supports resume)
+python step3_finbert.py
+
+# 5. Download WRDS data and build master panel (WRDS credentials required)
+python step4_wrds_panel.py
+```
+
+The master panel at `data/master_panel.csv` is the input to all econometric models in the dissertation (HAR, DCS-GB2, credit spread regression, and VAR).
 
 ---
 
-\paragraph{SEC filings.}
-Form 10-K and Form 8-K filings are downloaded from the
-\textbf{SEC EDGAR} database (\url{https://www.sec.gov/cgi-bin/browse-edgar})
-using the \texttt{sec-edgar-downloader} Python package. Filing dates
-are extracted from the \texttt{FILED AS OF DATE} field in the SGML
-submission header (\texttt{full-submission.txt}). Raw HTML documents
-are cleaned with \texttt{BeautifulSoup} by removing financial
-statement tables, XBRL-tagged data, navigation bars, and boilerplate
-legal text. Documents are capped at 8,000 words and must contain at
-least 150 clean words to be retained; Form 10-Q filings are excluded
-because fewer than 0.05\% contain sufficient narrative text after
-table removal. The baseline textual dataset comprises 263 Form~10-K
-and 4,042 Form~8-K documents across 41 firms over 2019--2024.
+## .gitignore
 
-\vspace{0.3em}
-\noindent Due to the large size of the raw filing archive (several
-gigabytes), the downloaded SEC filings are not included in the GitHub
-repository. The complete filing archive is deposited separately and
-is available for download at:
+Add the following to `.gitignore` to avoid committing large data files:
 
-\begin{center}
-\url{https://drive.google.com/file/d/1eRr2smRRcK8peeIzdGcPJwMEgd4kT-jO/view?usp=drive_link}
-\end{center}
-
-\noindent The archive should be extracted into the
-\texttt{data/sec\_filings/} directory before running
-\texttt{step3\_finbert.py}. The expected folder structure is:
-
-\begin{verbatim}
+```
 data/
-└── sec_filings/
-    └── sec-edgar-filings/
-        └── TICKER/
-            ├── 10-K/
-            │   └── YYYY-MM-DD/
-            │       ├── primary-document.html
-            │       └── full-submission.txt
-            └── 8-K/
-                └── YYYY-MM-DD/
-                    ├── primary-document.html
-                    └── full-submission.txt
-\end{verbatim}
+*.csv
+*.json
+__pycache__/
+*.pyc
+```
 
-\noindent Alternatively, the filings can be re-downloaded from
-scratch by running \texttt{step2\_sec\_download.py}, which fetches
-all filings directly from SEC EDGAR and supports resuming after
-interruption.
+---
+
+## Citation
+
+If you use this pipeline or the filing archive, please cite:
+
+> Yu, Q. (2026). *FinBERT Analysis of SEC Filings: Disclosure Sentiment, Realized Volatility, and Credit Spread Transmission*. MPhil Dissertation, Faculty of Economics, University of Cambridge.
