@@ -1,7 +1,6 @@
 # FinBERT Analysis of SEC Filings: Disclosure Sentiment, Realized Volatility, and Credit Spread Transmission
 
 **MPhil in Finance and Economics — University of Cambridge, July 2026**  
-**Candidate:** Qilong Yu &nbsp;|&nbsp; **Supervisor:** Andrew Harvey
 
 ---
 
@@ -307,8 +306,4 @@ __pycache__/
 
 ---
 
-## Citation
 
-If you use this pipeline or the filing archive, please cite:
-
-> Yu, Q. (2026). *FinBERT Analysis of SEC Filings: Disclosure Sentiment, Realized Volatility, and Credit Spread Transmission*. MPhil Dissertation, Faculty of Economics, University of Cambridge.
